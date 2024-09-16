@@ -1,212 +1,83 @@
-var MediaPlayer = (function () {
-  var currentTime = 0;
-  var jumpTime = 5;
-  var errorText = "";
-  var statusTimerID = -1;
+const manifestUri = 'http://192.168.10.75:8888/stream/index.m3u8';
+let retryInterval = null;
 
-  var OnPlayPauseHandler = function () {
-    console.log("called vid");
-    if (video.paused) {
-      setControl(MediaData.Play);
-    } else {
-      setControl(MediaData.Pause);
-    }
-  };
+function initApp() {
+  // Установка встроенных полифиллов для устранения несовместимостей браузера.
+  shaka.polyfill.installAll();
 
-  var setCurrentTime = function () {
-    currentTime = video.currentTime;
-  };
-  var _isVideoPlaying = function () {
-    return !!(
-      video.currentTime > 0 &&
-      !video.paused &&
-      !video.ended &&
-      video.readyState > 2
-    );
-  };
+  // Проверка, поддерживает ли браузер необходимые API.
+  if (shaka.Player.isBrowserSupported()) {
+    // Все выглядит хорошо!
+    initPlayer();
+  } else {
+    // Этот браузер не поддерживает минимальный набор необходимых API.
+    console.error('Browser not supported!');
+  }
+}
 
-  var _playerStatus = function () {
-    var isBuffered = player.getBufferFullness();
-    var isVideoPlaying = _isVideoPlaying();
-    if (isVideoPlaying === false && currentTime === 0) {
-      Status.OnPlayerUpdate("Video not played ...", "");
-      statusTimerID = Util.OnStopTimer(statusTimerID);
-    } else if (isVideoPlaying === false && video.ended) {
-      Status.OnPlayerUpdate("The Video play was completed...", "");
-      AppLog.debug(
-        "playerStatus",
-        {
-          mediaUrl: MediaData.mediaUrl,
-          message: "The Video play was completed",
-        },
-        ""
-      );
-      MediaPlayerUI.OnResetControls();
-      statusTimerID = Util.OnStopTimer(statusTimerID);
-    } else if (isVideoPlaying) {
-      if (isBuffered < 1) {
-        Status.OnPlayerUpdate("Bufferring & Playing ...", "");
-      } else {
-        Status.OnPlayerUpdate("Playing ...", "");
+async function initPlayer() {
+  // Создание экземпляра Player.
+  const video = document.getElementById('video');
+  const player = new shaka.Player(video);
+  player.configure({
+    streaming: {
+      bufferingGoal: 180,
+      rebufferingGoal: 5,
+      addSeekBar: false,
+      addBigPlayButton: false,
+      controlPanelElements: [],
+    },
+  });
+
+  // Присоединение плеера к видео элементу.
+  await player.attach(video);
+  video.play(); // Автоматическое начало воспроизведения видео
+
+  // Присоединение плеера к window для удобства доступа в JS-консоли.
+  window.player = player;
+
+  // Слушаем события ошибок.
+  player.addEventListener('error', onErrorEvent);
+
+  // Попытка загрузить манифест.
+  // Это асинхронный процесс.
+  try {
+    await player.load(manifestUri);
+    console.log('The video has now been loaded!');
+  } catch (e) {
+    onError(e);
+  }
+}
+
+function onErrorEvent(event) {
+  onError(event.detail);
+}
+
+function onError(error) {
+  console.error('Error code', error.code, 'object', error);
+
+  const retryErrorCodes = [1001, 1002, 1003, 1004, 1006, 1007, 1008, 1009, 1010, 2000, 2001, 2003, 2004, 3008, 3014, 3015, 3016, 3017, 4000, 4001, 4002, 4003, 4004, 4005, 4006, 4007];
+
+  if (retryErrorCodes.includes(error.code)) {
+    console.log('Retrying due to error code:', error.code);
+    startRetrying();
+  }
+}
+
+function startRetrying() {
+  if (retryInterval === null) {
+    retryInterval = setInterval(async () => {
+      try {
+        console.log('Attempting to reload stream...');
+        await player.load(manifestUri);
+        console.log('Stream reloaded successfully.');
+        clearInterval(retryInterval);
+        retryInterval = null;
+      } catch (e) {
+        console.error('Retry failed', e);
       }
-    } else {
-      if (isBuffered < 1) {
-        Status.OnPlayerUpdate("Bufferring & Paused ...", "");
-      } else {
-        Status.OnPlayerUpdate("Paused ...", "");
-        statusTimerID = Util.OnStopTimer(statusTimerID);
-      }
-    }
-  };
-  var OnPlayerRegisterEvent = function () {
-    video.addEventListener("click", OnPlayPauseHandler);
-    video.addEventListener("timeupdate", setCurrentTime);
-    video.addEventListener("error", Status.onErrorEvent, true);
-    player.addEventListener("error", Status.onErrorEvent, true);
+    }, 5000); // Попытка перезапуска каждые 5 секунд
+  }
+}
 
-    // https://github.com/google/shaka-player/issues/2450#issuecomment-597703896
-    video.addEventListener("playing", (event) => {
-      Status.OnPlayerUpdate("Bufferring & Playing ...", "");
-    });
-    video.addEventListener("pause", (event) => {
-      Status.OnPlayerUpdate("Paused ...", "");
-    });
-    console.log("my player ", player);
-    AppLog.info(
-      "OnPlayerRegisterEvent",
-      {
-        message: "Player Events are registered",
-      },
-      ""
-    );
-    statusTimerID = Util.OnStartTimer(statusTimerID, _playerStatus);
-    Status.OnPlayerUpdate("Player Events are registered", "");
-  };
-
-  var setControl = function (control) {
-    try {
-      switch (control) {
-        case "Rewind":
-          if (video.duration) {
-            video.pause();
-            if (currentTime < jumpTime) {
-              currentTime = 0;
-            } else {
-              currentTime -= jumpTime;
-            }
-            video.currentTime = currentTime;
-            Status.OnPlayerUpdate("Rewinded " + jumpTime + " sec", "");
-            setTimeout(function () {
-              setControl(MediaData.Play);
-            }, 500);
-          } else {
-            Status.OnPlayerUpdate("Video not played ...", "");
-            MediaPlayerUI.OnResetControls();
-          }
-          break;
-        case "Forward":
-          video.pause();
-          if (video.duration) {
-            if (currentTime + jumpTime >= video.duration) {
-              currentTime = video.duration;
-            } else {
-              currentTime += jumpTime;
-            }
-            video.currentTime = currentTime;
-            Status.OnPlayerUpdate("Forwaded " + jumpTime + " sec", "");
-            setTimeout(function () {
-              setControl(MediaData.Play);
-            }, 500);
-          } else {
-            Status.OnPlayerUpdate("Video not played ...", "");
-            MediaPlayerUI.OnResetControls();
-          }
-          break;
-        case "Play":
-          if (window.player.getAssetUri() !== MediaData.mediaUrl) {
-            window.player.unload();
-            _loadUrl();
-          } else {
-            video.play();
-            Status.OnPlayerUpdate("Playing", "-");
-            MediaPlayerUI.OnSelect(MediaData.Play);
-            statusTimerID = Util.OnStartTimer(statusTimerID, _playerStatus);
-          }
-          break;
-        case "Stop":
-          video.currentTime = 0;
-          video.pause();
-          Status.OnPlayerUpdate("Stopped", "");
-          break;
-        case "Pause":
-          if (video.duration) {
-            video.pause();
-            Status.OnPlayerUpdate("Paused", "");
-          } else {
-            Status.OnPlayerUpdate("Video not played ...", "");
-            MediaPlayerUI.OnResetControls();
-          }
-          break;
-        default:
-          break;
-      }
-    } catch (error) {
-      errorText = "Error on video '" + control + "' control operation";
-      Status.OnPlayerError(error, errorText);
-    }
-  };
-
-  var _loadUrl = function () {
-    window.player
-      .load(MediaData.mediaUrl)
-      .then(function () {
-        var loaded = "The video has now been loaded!";
-        Status.OnPlayerUpdate(loaded, "");
-        AppLog.debug(
-          "LoadPlayer",
-          {
-            mediaUrl: MediaData.mediaUrl,
-            message: loaded,
-          },
-          ""
-        );
-        setControl(MediaData.Play);
-      })
-      .catch(function (e) {
-        Status.OnPlayerError(e, "Error on Loading Player ...");
-      });
-  };
-
-  var _initPlayer = function () {
-    video = document.getElementById("video");
-    var player = new shaka.Player(video);
-    player.configure({
-      streaming: {
-        bufferingGoal: 180,
-        rebufferingGoal: 5,
-      },
-    });
-    window.player = player;
-    // Loading URL on the Player
-    _loadUrl();
-    OnPlayerRegisterEvent();
-  };
-
-  var init = function () {
-    shaka.polyfill.installAll();
-    if (shaka.Player.isBrowserSupported()) {
-      _initPlayer();
-    } else {
-      AppLog.info(
-        "init",
-        {
-          message: errorText,
-        },
-        ""
-      );
-    }
-  };
-  return { init, setControl };
-})();
-
-document.addEventListener("DOMContentLoaded", MediaPlayer.init, false);
+document.addEventListener('DOMContentLoaded', initApp);

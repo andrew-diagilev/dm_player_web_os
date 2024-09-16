@@ -4,8 +4,10 @@
   "vendor": "LG Developer",
   "type": "web",
   "main": "index.html",
-  "title": "Media Player",
+  "title": "DM Player",
   "icon": "icon.png",
   "disableBackHistoryAPI": true,
-  "uiRevision": 3
+  "uiRevision": 3,
+  "bgColor": "white",
+  "iconColor": "white"
 }
